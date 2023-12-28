@@ -2916,11 +2916,11 @@ async function load(url, loaders, options, context) {
   let data = url;
 
   if (typeof url === 'string') {
-    data = await fetch(url);
+    data = await fetch(url, { credentials: 'include' });
   }
 
   if (isBlob(url)) {
-    data = await fetch(url);
+    data = await fetch(url, { credentials: 'include' });
   }
 
   return await parse$3(data, loaders, options);
