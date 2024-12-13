@@ -6,7 +6,7 @@
 
 Runtime methods that can be used once a tileset is loaded
 
-<b>Signature:</b>
+**Signature:**
 
 ```typescript
 interface Runtime 
@@ -17,22 +17,29 @@ interface Runtime
 |  Method | Description |
 |  --- | --- |
 |  [dispose()](./three-loader-3dtiles.runtime.dispose.md) | Dispose of all of the tileset's assets in memory. |
-|  [getCameraFrustum(Camera)](./three-loader-3dtiles.runtime.getcamerafrustum.md) | Get the current camera frustum as mesh planes (for debugging purposes). |
+|  [getCameraFrustum(camera)](./three-loader-3dtiles.runtime.getcamerafrustum.md) | Get the current camera frustum as mesh planes (for debugging purposes). |
+|  [getDataAttributions()](./three-loader-3dtiles.runtime.getdataattributions.md) | Get the tileset's attribution text. |
 |  [getLatLongHeightFromPosition(Vector3)](./three-loader-3dtiles.runtime.getlatlongheightfromposition.md) | When viewing a Geo-located tileset, get the [GeoCoord](./three-loader-3dtiles.geocoord.md) value from a world-space <code>Vector3</code>. |
 |  [getPositionFromLatLongHeight(GeoCoord)](./three-loader-3dtiles.runtime.getpositionfromlatlongheight.md) | When viewing a Geo-located tileset, world-space <code>Vector3</code> from a [GeoCoord](./three-loader-3dtiles.geocoord.md)<!-- -->. |
 |  [getStats()](./three-loader-3dtiles.runtime.getstats.md) | Get a reference to the probe.gl [Stats](https://github.com/uber-web/probe.gl/blob/master/docs/api-reference/stats/stats.md) object. |
 |  [getTileBoxes()](./three-loader-3dtiles.runtime.gettileboxes.md) | Get the tile bounding boxes group when <code>debug: true</code> is set. |
 |  [getTileset()](./three-loader-3dtiles.runtime.gettileset.md) | Get a reference to the loaders.gl [Tileset3D](https://github.com/visgl/loaders.gl/blob/master/modules/tiles/docs/api-reference/tileset-3d.md) object. |
+|  [getWebMercatorCoord(coord)](./three-loader-3dtiles.runtime.getwebmercatorcoord.md) | Get Web-Mercator coordinates from Lat/long |
+|  [orientToGeocoord(coord)](./three-loader-3dtiles.runtime.orienttogeocoord.md) | Orient a WGS84 globe to lat/long |
+|  [overlayGeoJSON(geoJSONMesh, shaderOptions)](./three-loader-3dtiles.runtime.overlaygeojson.md) | Overlay a GeoJSON polygon on top of geo-located 3d tiles. Implements a \_Draping\_ algorithm from https://ieeexplore.ieee.org/abstract/document/8811991 |
 |  [setDebug(boolean)](./three-loader-3dtiles.runtime.setdebug.md) | Enable or disable deubg mode. |
 |  [setElevationRange(range)](./three-loader-3dtiles.runtime.setelevationrange.md) | In point clouds when coloring by <code>PointCloudColoring.Elevation</code>, set the min/max elevation values - Default: <code>[0, 400]</code>. |
 |  [setHideGround(boolean)](./three-loader-3dtiles.runtime.sethideground.md) | In point clouds wher the points are classified as <code>Ground</code>, hide the ground level points - Default: <code>false</code>. |
 |  [setIntensityContrast(number)](./three-loader-3dtiles.runtime.setintensitycontrast.md) | In point clouds when coloring by <code>PointCloudColoring.Intensity</code>, set the contrast factor. Default: <code>1.0</code>. |
+|  [setMaximumScreenSpaceError(number)](./three-loader-3dtiles.runtime.setmaximumscreenspaceerror.md) | Set the current maximum screen space error. See [LoaderOptions](./three-loader-3dtiles.loaderoptions.md) |
 |  [setMaxIntensity(number)](./three-loader-3dtiles.runtime.setmaxintensity.md) | In point clouds when coloring by <code>PointCloudColoring.Intensity</code>, set the max intensity value - Default: <code>1.0</code> |
 |  [setPointAlpha(number)](./three-loader-3dtiles.runtime.setpointalpha.md) | In point clouds when, set the alpha value. Default: <code>1.0</code>. |
 |  [setPointCloudColoring(PointCloudColoring)](./three-loader-3dtiles.runtime.setpointcloudcoloring.md) | In point clouds set the type of coloring used. See [PointCloudColoring](./three-loader-3dtiles.pointcloudcoloring.md) |
+|  [setRenderer(renderer)](./three-loader-3dtiles.runtime.setrenderer.md) | Set the renderer used for shader processsing |
 |  [setShading(Shading)](./three-loader-3dtiles.runtime.setshading.md) | Set the current shading mode for b3dm tiles. See [Shading](./three-loader-3dtiles.shading.md)<!-- -->. |
 |  [setViewDistanceScale(number)](./three-loader-3dtiles.runtime.setviewdistancescale.md) | Set the current view distance scale. See [LoaderOptions](./three-loader-3dtiles.loaderoptions.md) |
+|  [setViewport(viewport)](./three-loader-3dtiles.runtime.setviewport.md) | Set the viewport properties |
 |  [setWireframe(boolean)](./three-loader-3dtiles.runtime.setwireframe.md) | Enable or disable wireframe mode. |
 |  [showTiles(boolean)](./three-loader-3dtiles.runtime.showtiles.md) | Show or hide the tile bounding boxes. |
-|  [update(number, WebGLRenderer, Camera)](./three-loader-3dtiles.runtime.update.md) | Update the tileset for rendering. |
+|  [update(dt, camera)](./three-loader-3dtiles.runtime.update.md) | Update the tileset for rendering. |
 

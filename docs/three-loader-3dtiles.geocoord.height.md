@@ -4,7 +4,9 @@
 
 ## GeoCoord.height property
 
-<b>Signature:</b>
+Height
+
+**Signature:**
 
 ```typescript
 height: number;

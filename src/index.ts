@@ -1,10 +1,13 @@
 import { load } from '@loaders.gl/core';
 import { CesiumIonLoader, Tiles3DLoader } from '@loaders.gl/3d-tiles';
+import { _GeoJSONLoader } from '@loaders.gl/json';
 import { Tileset3D, TILE_TYPE, TILE_CONTENT_STATE } from '@loaders.gl/tiles';
 import { CullingVolume, Plane } from '@math.gl/culling';
 import  { _PerspectiveFrustum as PerspectiveFrustum}  from '@math.gl/culling';
-import { Matrix4 as MathGLMatrix4 } from '@math.gl/core';
+import { Matrix4 as MathGLMatrix4, toRadians } from '@math.gl/core';
+import { Ellipsoid } from '@math.gl/geospatial';
 import * as Util from './util';
+import * as Draping from './draping';
 import {
   Object3D,
   Group,
@@ -23,10 +26,11 @@ import {
   BufferAttribute,
   Points,
   Camera,
-  PerspectiveCamera,
-  WebGLRenderer,
   Texture,
-  Euler
+  Euler,
+  Quaternion,
+  NormalBlending,
+  WebGLRenderer
 } from 'three';
 
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -37,7 +41,18 @@ import { Gradients } from './gradients';
 
 import { PointCloudFS, PointCloudVS } from './shaders';
 
-import { LoaderProps, LoaderOptions, Runtime, PointCloudColoring, Shading, GeoCoord, GeoTransform } from './types';
+import type { 
+  LoaderProps, 
+  LoaderOptions, 
+  Runtime, 
+  GeoCoord, 
+  GeoJSONLoaderProps, 
+  FeatureToColor, 
+  DrapingShaderOptions,
+  Viewport
+} from './types';
+import { PointCloudColoring, Shading } from './types';
+import { BinaryFeatureCollection, FeatureCollection } from '@loaders.gl/schema';
 
 const gradient = Gradients.RAINBOW;
 const gradientTexture = typeof document != 'undefined' ? Util.generateGradientTexture(gradient) : null;
@@ -51,9 +66,12 @@ const defaultOptions: LoaderOptions = {
   updateInterval: 0.1,
   maxConcurrency: 1,
   maximumScreenSpaceError: 16,
-  maximumMemoryUsage: 32,
+  memoryAdjustedScreenSpaceError: true,
+  maximumMemoryUsage: 400,
+  memoryCacheOverflow : 128,
   viewDistanceScale: 1.0,
   skipLevelOfDetail: false,
+  resetTransform: false,
   updateTransforms: true,
   shading: Shading.FlatTexture,
   transparent: false,
@@ -62,13 +80,13 @@ const defaultOptions: LoaderOptions = {
   worker: true,
   wireframe: false,
   debug: false,
+  gltfLoader: null,
   basisTranscoderPath: null,
   dracoDecoderPath: null,
   material: null,
-  computeNormals: false,
-  shaderCallback: null,
-  geoTransform: GeoTransform.Reset,
-  preloadTilesCount: null
+  contentPostProcess: undefined,
+  preloadTilesCount: null,
+  collectAttributions: false
 };
 
 /** 3D Tiles Loader */
@@ -83,7 +101,9 @@ class Loader3DTiles {
   */
   public static async load (props: LoaderProps): Promise<{ model: Object3D; runtime: Runtime }> {
     const options = { ...defaultOptions, ...props.options };
+
     const { url } = props;
+    let { viewport, renderer } = props;
 
     const UPDATE_INTERVAL = options.updateInterval;
     const MAX_DEPTH_FOR_ORIENTATION = 5;
@@ -97,6 +117,14 @@ class Loader3DTiles {
       const metadata = await CesiumIonLoader.preload(url, loadersGLOptions);
       loadersGLOptions['fetch'] = { headers: metadata.headers };
     }
+
+    if (options.googleApiKey) {
+      loadersGLOptions['fetch'] = { headers: { 'X-GOOG-API-KEY': options.googleApiKey} };
+      if (!props.options.hasOwnProperty('collectAttributions')) {  
+        options.collectAttributions = true;
+      }
+    }
+
 
     if (props.loadingManager) {
       props.loadingManager.itemStart(url);
@@ -141,35 +169,40 @@ class Loader3DTiles {
       vertexColors: true
     });
     
-    let cameraReference = null;
-    let rendererReference = null;
-
-    const gltfLoader = new GLTFLoader();
-
+    let gltfLoader = undefined;
     let ktx2Loader = undefined;
     let dracoLoader = undefined;
 
-    if (options.basisTranscoderPath) {
-      ktx2Loader = new KTX2Loader();
-      ktx2Loader.detectSupport(props.renderer);
-      ktx2Loader.setTranscoderPath(options.basisTranscoderPath + '/');
-      ktx2Loader.setWorkerLimit(1);
-
-      gltfLoader.setKTX2Loader(ktx2Loader);
+    if (options.gltfLoader) {
+      gltfLoader = options.gltfLoader;
     }
+    else {
+      gltfLoader = new GLTFLoader();
 
-    if (options.dracoDecoderPath) {
-      dracoLoader = new DRACOLoader();
-      dracoLoader.setDecoderPath(options.dracoDecoderPath + '/');
-      dracoLoader.setWorkerLimit(options.maxConcurrency);
-      gltfLoader.setDRACOLoader(dracoLoader);
+      if (options.basisTranscoderPath) {
+        ktx2Loader = new KTX2Loader();
+        ktx2Loader.detectSupport(renderer ?? new WebGLRenderer());
+        ktx2Loader.setTranscoderPath(options.basisTranscoderPath + '/');
+        ktx2Loader.setWorkerLimit(1);
+
+        gltfLoader.setKTX2Loader(ktx2Loader);
+      }
+
+      if (options.dracoDecoderPath) {
+        dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath(options.dracoDecoderPath + '/');
+        dracoLoader.setWorkerLimit(options.maxConcurrency);
+        gltfLoader.setDRACOLoader(dracoLoader);
+      }
     }
-
+    
     const unlitMaterial = new MeshBasicMaterial({transparent: options.transparent});
 
     const tileOptions = {
       maximumMemoryUsage: options.maximumMemoryUsage,
       maximumScreenSpaceError: options.maximumScreenSpaceError,
+      memoryAdjustedScreenSpaceError: options.memoryAdjustedScreenSpaceError,
+      memoryCacheOverflow: options.memoryCacheOverflow,
       viewDistanceScale: options.viewDistanceScale,
       skipLevelOfDetail: options.skipLevelOfDetail,
       updateTransforms: options.updateTransforms,
@@ -203,19 +236,24 @@ class Loader3DTiles {
       },
       onTileLoad: async (tile) => {
         if (tileset) {
-          if (!orientationDetected && tile?.depth <= MAX_DEPTH_FOR_ORIENTATION) {
+          if (options.resetTransform && !orientationDetected && tile?.depth <= MAX_DEPTH_FOR_ORIENTATION) {
             detectOrientation(tile);
           }
-          tileset._frameNumber++;
-          tilesetUpdate(tileset, renderMap, rendererReference, cameraReference);
+          needsUpdate = true;
         }
       },
       onTileUnload: (tile) => {
         unloadQueue.push(tile);
       },
       onTileError: (tile, message) => {
-        console.error('Tile error', tile.id, message);
+        console.warn('Tile error', tile.id, message);
       },
+      onTraversalComplete(selectedTiles) {
+        if (options.collectAttributions) {
+          dataAttributions = collectAttributions(selectedTiles);
+        }
+        return selectedTiles;
+      }
     };
     const tileset = new Tileset3D(tilesetJson, {
       ...tileOptions,
@@ -234,18 +272,19 @@ class Loader3DTiles {
     //
     // transformations
     const threeMat = new Matrix4();
-    const tileTrasnform = new Matrix4();
+    const tileTransform = new Matrix4();
     const rootCenter = new Vector3();
     let orientationDetected = false;
+
+    let dataAttributions = '';
 
     if (tileset.root.boundingVolume) {
       if (tileset.root.header.boundingVolume.region) {
         // TODO: Handle region type bounding volumes
         // https://github.com/visgl/loaders.gl/issues/1994
         console.warn("Cannot apply a model matrix to bounding volumes of type region. Tileset stays in original geo-coordinates.")
-        options.geoTransform = GeoTransform.WGS84Cartesian;
       }
-      tileTrasnform.setPosition(
+      tileTransform.setPosition(
         tileset.root.boundingVolume.center[0],
         tileset.root.boundingVolume.center[1],
         tileset.root.boundingVolume.center[2]
@@ -263,21 +302,18 @@ class Loader3DTiles {
     let disposeFlag = false;
     let loadingEnded = false;
 
-
     pointcloudUniforms.rootCenter.value.copy(rootCenter);
     pointcloudUniforms.rootNormal.value.copy(new Vector3(0, 0, 1).normalize());
 
     // Extra stats
     tileset.stats.get('Loader concurrency').count = options.maxConcurrency
-
-    tileset.stats.get('Maximum SSE').count = options.maximumScreenSpaceError;
-
     tileset.stats.get('Maximum mem usage').count = options.maximumMemoryUsage;
 
     let timer = 0;
 
     let lastCameraTransform: Matrix4 = null;
-    let lastCameraAspect = null;
+    let needsUpdate = true;
+    let cameraReference = null;
     const lastCameraPosition = new Vector3(Infinity, Infinity, Infinity);
     let sseDenominator = null;
 
@@ -285,34 +321,13 @@ class Loader3DTiles {
     const lastRootTransform:Matrix4 = new Matrix4().copy(root.matrixWorld)
     const rootTransformInverse = new Matrix4().copy(lastRootTransform).invert();
 
-    detectOrientation(tileset.root);
-    updateResetTransform();
+    if (options.resetTransform) {
+      detectOrientation(tileset.root);
+    }
 
     if (options.debug) {
       boxMap[tileset.root.id].applyMatrix4(threeMat);
       tileBoxes.matrixWorld.copy(root.matrixWorld);
-    }
-
-    if (options.geoTransform == GeoTransform.Mercator) {
-      const coords = Util.datumsToSpherical(
-        tileset.cartographicCenter[1],
-        tileset.cartographicCenter[0]
-      )
-      rootCenter.set(
-       coords.x,
-       0,
-       -coords.y
-      );
-
-      root.position.copy(rootCenter);
-      root.rotation.set(-Math.PI / 2, 0, 0);
-
-      root.updateMatrixWorld(true);
-
-    } else if (options.geoTransform == GeoTransform.WGS84Cartesian) {
-      root.applyMatrix4(tileTrasnform);
-      root.updateMatrixWorld(true);
-      rootCenter.copy(root.position);
     }
 
     function detectOrientation(tile) {
@@ -329,35 +344,32 @@ class Loader3DTiles {
       if (!rotation.equals(new Euler())) {
         orientationDetected = true;
         const pos = new Vector3(
-          tileTrasnform.elements[12], 
-          tileTrasnform.elements[13], 
-          tileTrasnform.elements[14])
+          tileTransform.elements[12], 
+          tileTransform.elements[13], 
+          tileTransform.elements[14])
         ;
-        tileTrasnform.extractRotation(orientationMatrix);
-        tileTrasnform.setPosition(pos);
-        updateResetTransform();
+        tileTransform.extractRotation(orientationMatrix);
+        tileTransform.setPosition(pos);
       } 
+      updateTransform();
     }
 
-    function updateResetTransform() {
-      if (options.geoTransform != GeoTransform.WGS84Cartesian) {
-        // Reset the current model matrix and apply our own transformation
-        threeMat.copy(tileTrasnform).invert();
-        threeMat.premultiply(lastRootTransform);
+    function updateTransform() {
+      // Reset the current model matrix and apply our own transformation
+      threeMat.copy(lastRootTransform);
       
-        threeMat.copy(lastRootTransform).multiply(new Matrix4().copy(tileTrasnform).invert());
-
-        tileset.modelMatrix = new MathGLMatrix4(threeMat.toArray());
+      if (options.resetTransform) {
+        threeMat.multiply(new Matrix4().copy(tileTransform).invert());
       }
-    }
 
-    function tilesetUpdate(tileset, renderMap, renderer, camera) {
-      if (disposeFlag) {
+      tileset.modelMatrix = new MathGLMatrix4(threeMat.toArray());
+    }
+    function tilesetUpdate(tileset, renderMap, viewport, camera) {
+      if (disposeFlag || !camera) {
         return;
       }
-
       // Assumes camera fov, near and far are not changing
-      if (!sseDenominator || camera.aspect != lastCameraAspect) {
+      if (!sseDenominator) {
         const loadersFrustum = new PerspectiveFrustum({
           fov: (camera.fov / 180) * Math.PI,
           aspectRatio: camera.aspect,
@@ -366,7 +378,6 @@ class Loader3DTiles {
         });
 
         sseDenominator = loadersFrustum.sseDenominator;
-        lastCameraAspect = camera.aspect;
 
         if (options.debug) {
           console.log('Updated sse denonimator:', sseDenominator);
@@ -377,15 +388,12 @@ class Loader3DTiles {
       const planes = frustum.planes.map((plane) => new Plane(plane.normal.toArray(), plane.constant));
       const cullingVolume = new CullingVolume(planes);
 
-      const rendererSize = new Vector2();
-      renderer.getSize(rendererSize);
-
       const frameState = {
         camera: {
           position: lastCameraPosition.toArray(),
         },
 
-        height: rendererSize.y,
+        height: viewport.height * viewport.devicePixelRatio,
         frameNumber: tileset._frameNumber,
         sseDenominator: sseDenominator,
         cullingVolume: cullingVolume,
@@ -449,6 +457,30 @@ class Loader3DTiles {
       return frameState;
     }
 
+    function setGeoTransformation(transformationMatrix) {
+      const position = new Vector3();
+      const quaternion = new Quaternion();
+      const scale = new Vector3();
+
+      // Decompose the matrix into position, quaternion, and scale
+      transformationMatrix.decompose(position, quaternion, scale);
+
+      // Apply the decomposed values to the root object
+      root.position.copy(position);
+      root.quaternion.copy(quaternion);
+      root.scale.copy(scale);
+
+      // Update the root object's matrix to reflect the changes
+      root.updateMatrix();
+      root.updateMatrixWorld(true);
+
+      lastRootTransform.copy(root.matrixWorld);
+      rootTransformInverse.copy(lastRootTransform).invert();
+
+      updateTransform();
+      
+    }
+
     return {
       model: root,
       runtime: {
@@ -457,6 +489,9 @@ class Loader3DTiles {
         },
         getStats: () => {
           return tileset.stats;
+        },
+        getDataAttributions: () => {
+          return dataAttributions;
         },
         showTiles: (visible) => {
           tileBoxes.visible = visible;
@@ -482,7 +517,12 @@ class Loader3DTiles {
         setViewDistanceScale: (scale) => {
           tileset.options.viewDistanceScale = scale;
           tileset._frameNumber++;
-          tilesetUpdate(tileset, renderMap, rendererReference, cameraReference);
+          tilesetUpdate(tileset, renderMap, viewport, cameraReference);
+        },
+        setMaximumScreenSpaceError: (sse) => {
+          tileset.options.maximumScreenSpaceError = sse;
+          tileset._frameNumber++;
+          tilesetUpdate(tileset, renderMap, viewport, cameraReference);
         },
         setHideGround: (enabled) => {
           pointcloudUniforms.hideGround.value = enabled;
@@ -513,8 +553,31 @@ class Loader3DTiles {
           };
         },
         getPositionFromLatLongHeight: (coord) => {
-          const cartesianPosition = tileset.ellipsoid.cartographicToCartesian([coord.long, coord.lat, coord.height]);
+          const cartesianPosition = tileset.ellipsoid.cartographicToCartesian([
+            coord.long,
+            coord.lat,
+            coord.height
+          ]);
           return new Vector3(...cartesianPosition).applyMatrix4(threeMat);
+        },
+        orientToGeocoord: (coord:GeoCoord) => {
+          // Set the transofrmation matrix to the rotate the WGS84 globe to the given lat/long/Alt
+          const cartographicPosition = [coord.long, coord.lat, coord.height];
+
+          const cartesianPosition:number[] = tileset.ellipsoid.cartographicToCartesian(cartographicPosition);
+          const ellipsoidTransform = new Matrix4().fromArray(tileset.ellipsoid.eastNorthUpToFixedFrame(cartesianPosition));
+
+          // Flip to Z is altitiude, Y is north, X is east
+          const alignRotation = new Matrix4().makeRotationFromEuler(
+            new Euler(Math.PI / 2, Math.PI / 2, 0)
+          );
+
+          const geoTransform = new Matrix4().copy(ellipsoidTransform).multiply(alignRotation).invert()
+
+          setGeoTransformation(geoTransform);
+        },
+        getWebMercatorCoord: (coord:GeoCoord): Vector2 => {
+          return Util.datumsToSpherical(coord.lat, coord.long);
         },
         getCameraFrustum: (camera: Camera) => {
           const frustum = Util.getCameraFrustum(camera);
@@ -527,17 +590,47 @@ class Loader3DTiles {
 
           return model;
         },
-        update: function (dt: number, renderer: WebGLRenderer, camera: Camera) {
-          cameraReference = camera;
-          rendererReference = renderer;
+        overlayGeoJSON: (geoJSONMesh, shaderOptions: DrapingShaderOptions) => {
+          geoJSONMesh.applyMatrix4(threeMat);
+          geoJSONMesh.updateMatrixWorld();
 
+          // Initialize draping
+          if (!renderer) {
+            throw new Error("GeoJSON draping requires a renderer reference via LoaderProps");
+          }
+          Draping.setup(viewport, root, renderer, shaderOptions);
+          (geoJSONMesh.material as Material).dispose();
+          geoJSONMesh.material = Draping.drapingMaterial;
+
+          return geoJSONMesh;
+        },
+        setViewport: (updatedViewport: Viewport) => {
+          viewport = updatedViewport;
+          sseDenominator = null;
+          needsUpdate = true;
+
+          if (Draping.target) {
+            Draping.resizeRenderTarget(viewport);
+          }
+        },
+        setRenderer: (updatedRenderer: WebGLRenderer) => {
+          renderer = updatedRenderer;
+        },
+        update: function (dt: number, camera: Camera) {
+          cameraReference = camera;
           timer += dt;
+
+          if (Draping.target) {
+            Draping.update(camera);
+          }
 
           if (tileset && timer >= UPDATE_INTERVAL) {
             if (!lastRootTransform.equals(root.matrixWorld)) {
               timer = 0;
               lastRootTransform.copy(root.matrixWorld);
-              updateResetTransform();
+              if (options.updateTransforms) {
+                  updateTransform();
+              }
 
               const rootCenter = new Vector3().setFromMatrixPosition(lastRootTransform);
               pointcloudUniforms.rootCenter.value.copy(rootCenter);
@@ -553,16 +646,16 @@ class Loader3DTiles {
             if (lastCameraTransform == null) {
               lastCameraTransform = new Matrix4().copy(camera.matrixWorld);
             } else {
-              const cameraChanged: boolean =
-                !camera.matrixWorld.equals(lastCameraTransform) ||
-                !((<PerspectiveCamera>camera).aspect == lastCameraAspect);
-
-              if (cameraChanged) {
+              if (
+                needsUpdate || 
+                cameraChanged(camera, lastCameraTransform)
+            ) {
                 timer = 0;
+                needsUpdate = false;
                 tileset._frameNumber++;
                 camera.getWorldPosition(lastCameraPosition);
                 lastCameraTransform.copy(camera.matrixWorld);
-                tilesetUpdate(tileset, renderMap, renderer, camera);
+                tilesetUpdate(tileset, renderMap, viewport, camera);
               }
             }
           }
@@ -579,7 +672,7 @@ class Loader3DTiles {
             const obj = tileBoxes.children[0] as LineSegments;
             tileBoxes.remove(obj);
             obj.geometry.dispose();
-            (<Material>obj.material).dispose();
+            (obj.material as Material).dispose();
           }
           if (ktx2Loader) {
             ktx2Loader.dispose();
@@ -591,12 +684,67 @@ class Loader3DTiles {
       },
     };
   }
+  /**
+  * Loads a tileset of 3D Tiles according to the given {@link GeoJSONLoaderProps}
+  * Could be overlayed on geograpical 3D Tiles using {@link Runtime.overlayGeoJSON}
+  * @public
+  *
+  * @param props - Properties for this load call {@link GeoJSONLoaderProps}.
+  * @returns An object containing the 3D Model to be added to the scene
+  */
+  public static async loadGeoJSON(props: GeoJSONLoaderProps): Promise <Object3D> {
+    const { url, height, featureToColor } = props; 
+    return load(url, _GeoJSONLoader, { worker: false,  gis: {format: 'binary'}}).then((data) => {  
+        const featureCollection = data as unknown as BinaryFeatureCollection;
+        const geometry = new BufferGeometry();
+        const cartesianPositions = (featureCollection.polygons.positions.value as Float32Array).reduce((acc, val, i, src) => {
+          if (i % 2 == 0) {
+            const cartographic = [val, src[i + 1], height ?? 0];
+            const cartesian = Ellipsoid.WGS84.cartographicToCartesian(cartographic);
+
+            acc.push(...cartesian);
+          }
+          return acc;
+        }, []);
+        geometry.setAttribute('position', new Float32BufferAttribute(
+          cartesianPositions,
+          3
+        ));
+        if (featureToColor) {
+          const colors = ((featureCollection.polygons.numericProps as any)
+          [featureToColor.feature].value as Array<number>).reduce((acc, val, i, src) => {
+              const color = featureToColor.colorMap(val);
+              acc[i * 3] = color.r;
+              acc[(i *3) + 1] = color.g;
+              acc[(i *3) + 2] = color.b;
+              return acc;
+          }, []);
+          geometry.setAttribute('color', new Float32BufferAttribute(
+            colors,
+            3
+          ));
+        }
+        geometry.setIndex(
+          new BufferAttribute(featureCollection.polygons.triangles.value, 1)
+        );
+        const material = new MeshBasicMaterial({
+          transparent: true, 
+          vertexColors: true,
+          opacity: 0.5, 
+          blending: NormalBlending
+        });
+        const mesh = new Mesh( geometry, material );
+        return mesh;
+    });
+  }
 }
+
+
 
 async function createGLTFNodes(gltfLoader, tile, unlitMaterial, options, rootTransformInverse): Promise<Object3D> {
   return new Promise((resolve, reject) => {
     const rotateX = new Matrix4().makeRotationAxis(new Vector3(1, 0, 0), Math.PI / 2);
-    const shouldRotate = tile.tileset.asset?.gltfUpAxis !== "Z";
+    const shouldRotate = tile.content.gltfUpAxis !== "Z";
 
     // The computed trasnform already contains the root's transform, so we have to invert it
     const contentTransform = new Matrix4().fromArray(tile.computedTransform).premultiply(rootTransformInverse);
@@ -605,23 +753,44 @@ async function createGLTFNodes(gltfLoader, tile, unlitMaterial, options, rootTra
       contentTransform.multiply(rotateX); // convert from GLTF Y-up to Z-up
     }
 
+    if (!tile.content.byteLength) {
+      // In some cases (Google 3D Tiles) the byte length is not set in the content header
+      tile.content.byteLength = tile.content.gltfArrayBuffer.byteLength;
+    }
+
     gltfLoader.parse(
       tile.content.gltfArrayBuffer,
-      tile.contentUrl ? tile.contentUrl.substr(0,tile.contentUrl.lastIndexOf('/') + 1) : '',
+      tile.contentUrl ? tile.contentUrl.substr(0,tile.contentUrl.lastIndexOf('/') + 1) : null,
       (gltf) => {
+        tile.userData.asset = gltf.asset;
+        
         const tileContent = gltf.scenes[0] as Group;
         tileContent.applyMatrix4(contentTransform); 
+      
+        // Memory usage 
+        tile.content.texturesByteLength = 0;
+        tile.content.geometriesByteLength = 0;
 
         tileContent.traverse((object) => {
           if (object.type == "Mesh") {
             const mesh = object as Mesh;
+
+            tile.content.geometriesByteLength += Util.getGeometryVRAMByteLength(mesh.geometry);
+
             const originalMaterial = (mesh.material as MeshStandardMaterial);
             const originalMap = originalMaterial.map;
+
+            if (originalMap) {
+              const textureByteLength = Util.getTextureVRAMByteLength(originalMap);
+              if (textureByteLength) {
+                tile.content.texturesByteLength += textureByteLength;
+              }
+            }
 
             if (options.material) {
               mesh.material = options.material.clone();
               originalMaterial.dispose();
-            } else if (options.shading == Shading.FlatTexture) {
+            } else if (options.shading == Shading.FlatTexture && (mesh.material as Material).type !== "MeshBasicMaterial") {
               mesh.material = unlitMaterial.clone();
               originalMaterial.dispose();
             }
@@ -639,16 +808,14 @@ async function createGLTFNodes(gltfLoader, tile, unlitMaterial, options, rootTra
               (mesh.material as MeshStandardMaterial).map = null;
             }
 
-            if (options.shaderCallback) {
-              mesh.onBeforeRender = options.shaderCallback;
-            }
             (mesh.material as MeshStandardMaterial | MeshBasicMaterial).wireframe = options.wireframe;
 
-            if (options.computeNormals) {
-              mesh.geometry.computeVertexNormals();
+            if (options.contentPostProcess) {
+              options.contentPostProcess(mesh);
             }
           }
         });
+        tile.content.gpuMemoryUsageInBytes = tile.content.texturesByteLength + tile.content.geometriesByteLength;
         resolve(tileContent);
       },
       (e) => {
@@ -695,6 +862,9 @@ function createPointNodes(tile, pointcloudMaterial, options, rootTransformInvers
     geometry.setAttribute('classification', new Uint8BufferAttribute(d.classifications, 1, false));
   }
 
+  tile.content.geometriesByteLength = Util.getGeometryVRAMByteLength(geometry);
+  tile.content.gpuMemoryUsageInBytes = tile.content.geometriesByteLength;
+
   const tileContent = new Points(geometry, options.material || pointcloudMaterial);
 
   if (d.rtc_center) {
@@ -702,6 +872,11 @@ function createPointNodes(tile, pointcloudMaterial, options, rootTransformInvers
     contentTransform.multiply(new Matrix4().makeTranslation(c[0], c[1], c[2]));
   }
   tileContent.applyMatrix4(contentTransform);
+
+  if (options.contentPostProcess) {
+    options.contentPostProcess(tileContent);
+  }
+
   return tileContent;
 }
 
@@ -738,4 +913,45 @@ function disposeNode(node) {
   }
 }
 
-export { Loader3DTiles, PointCloudColoring, Shading, Runtime, GeoCoord, GeoTransform, LoaderOptions, LoaderProps };
+function cameraChanged(camera:Camera, lastCameraTransform:Matrix4) {
+  return !camera.matrixWorld.equals(lastCameraTransform);
+}
+
+function collectAttributions(tiles) {
+  // attribution guidelines: https://developers.google.com/maps/documentation/tile/create-renderer#display-attributions
+  
+  const copyrightCounts = new Map(); // Use a Map to keep track of counts
+
+  tiles.forEach(tile => {
+    const copyright = tile?.userData?.asset?.copyright;
+    if (copyright) {
+      const attributions = copyright.split(/;/g).map(attr => attr.trim());
+      attributions.forEach(attr => {
+        if (attr) {
+          // Increment the count for this attribution in the Map
+          copyrightCounts.set(attr, (copyrightCounts.get(attr) || 0) + 1);
+        }
+      });
+    }
+  });
+
+  const sortedAttributions = Array.from(copyrightCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([attr,]) => attr);
+
+  const attributionString = sortedAttributions.join('; ');
+  return attributionString;
+}
+
+export {
+   Loader3DTiles, 
+   PointCloudColoring, 
+   Shading, 
+   Runtime, 
+   GeoCoord, 
+   FeatureToColor, 
+   LoaderOptions, 
+   LoaderProps,
+   GeoJSONLoaderProps,
+   DrapingShaderOptions
+};

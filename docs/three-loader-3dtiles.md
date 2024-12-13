@@ -14,7 +14,6 @@
 
 |  Enumeration | Description |
 |  --- | --- |
-|  [GeoTransform](./three-loader-3dtiles.geotransform.md) |  |
 |  [PointCloudColoring](./three-loader-3dtiles.pointcloudcoloring.md) | Types of coloring used when viewing point cloud tiles |
 |  [Shading](./three-loader-3dtiles.shading.md) | Types of shading used when viewing b3dm (mesh) tiles |
 
@@ -22,7 +21,10 @@
 
 |  Interface | Description |
 |  --- | --- |
+|  [DrapingShaderOptions](./three-loader-3dtiles.drapingshaderoptions.md) |  |
+|  [FeatureToColor](./three-loader-3dtiles.featuretocolor.md) |  |
 |  [GeoCoord](./three-loader-3dtiles.geocoord.md) | Container object for interfacing with lat/long/height coordinates |
+|  [GeoJSONLoaderProps](./three-loader-3dtiles.geojsonloaderprops.md) |  |
 |  [LoaderOptions](./three-loader-3dtiles.loaderoptions.md) | Advanced loader options |
 |  [LoaderProps](./three-loader-3dtiles.loaderprops.md) | Properties for loading a tileset |
 |  [Runtime](./three-loader-3dtiles.runtime.md) | Runtime methods that can be used once a tileset is loaded |

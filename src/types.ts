@@ -2,12 +2,18 @@ import { Stats } from '@probe.gl/stats';
 import { Tileset3D } from '@loaders.gl/tiles';
 import {
   Object3D,
+  Vector2,
   Vector3,
   Material,
-  Shader,
+  Camera,
   WebGLRenderer,
-  LoadingManager
+  LoadingManager,
+  Mesh,
+  Points,
+  Color
 } from 'three';
+
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
 /** Types of coloring used when viewing point cloud tiles */
 enum PointCloudColoring {
@@ -25,10 +31,12 @@ enum Shading {
   ShadedNoTexture = 3,
 }
 
-enum GeoTransform {
-  Reset = 1,
-  Mercator = 2,
-  WGS84Cartesian = 3
+import type { DrapingShaderOptions } from './draping';
+
+interface Viewport {
+  width: number;
+  height: number;
+  devicePixelRatio: number;
 }
 
 /** Properties for loading a tileset */
@@ -37,7 +45,9 @@ interface LoaderProps {
     * it would have the form: `https://assets.cesium.com/[ASSET_ID]/tileset.json`.
     */
     url: string;
-    /** Required when using compressed textures (basis universal) for GPU feature detection. */
+    /** Viewport properties. Use `setViewport()` to update */
+    viewport: Viewport;
+    /** An existing renderer reference. Required for shader processing. */
     renderer?: WebGLRenderer;
     /** Advanced options for loading the tileset ({@link LoaderOptions}) */
     options?: LoaderOptions;
@@ -51,14 +61,24 @@ interface LoaderProps {
 interface LoaderOptions {
   /** A Cesium ION access token when loading tilesets from Cesium ION. */
   cesiumIONToken?: string;
-  /** Whether to check if the tileset was transformed, set to `true` if the model is changes position in runtime. Default: `true` */
+  /** Google API Key for loading Google Maps 3D Tiles*/
+  googleApiKey?: string;
+  /** Collect tile attribution data (copyright) - Default: `true` if `googleApiKey` is set, otherwise `false`. */
+  collectAttributions?: boolean;
+  /** Whether to reset the tileset to the origin (0, 0, 0) - Default: `false`. */
+  resetTransform?: boolean;
+  /** Whether to check if the tileset was transformed, set to `true` if the model is changes position in runtime - Default: `true`. */
   updateTransforms?: boolean;
   /** Interval in seconds for the traverser to check in an update is needed - Default: `0.1`. */
   updateInterval?: number;
   /** Maximum GPU memory (MB) to use for displaying tiles. May go over the limit if tiles within the camera viewport exceed that ammount - Default: `32`. */
   maximumMemoryUsage?: number;
-  /** determines the distance from tiles in which they are refined, depending on their geometrical size. increase the value to load lower lod tiles from the same view distance (increases performnace) - default: `16`.*/
+  /** determines the distance from tiles in which they are refined, depending on their geometrical size. increase the value to load lower lod tiles from the same view distance (increases performnace) - Default: `16`.*/
   maximumScreenSpaceError?: number;
+  /** Whether to adjust the screen space error to maintain the maximum memory limit - Default `true`.*/
+  memoryAdjustedScreenSpaceError?: boolean;
+  /** The maximum additional memory (in MB) to allow for cache headroom before adjusting the screen spacer error - Default: `1`. */
+  memoryCacheOverflow?: number;
   /** 0-1 scale for the LOD quality. A lower value loads tiles from lower LODs (increases performance). */ 
   viewDistanceScale?: number;
   /** Maximum worker thread concurrency when processing DRACO-compressed tiles - Default: `1` worker. */
@@ -77,33 +97,50 @@ interface LoaderOptions {
   transparent?: boolean;
   /** Apply a custom material, supports both b3dm (mesh) tiles and Point Cloud tiles - Default: `undefined` **/
   material?: Material;
-  /** When viewing b3dm (mesh) tiles, a callback to update shader uniforms - Default: `undefined` */
-  shaderCallback?: (shader: Shader, renderer: WebGLRenderer) => void;
+  /** A callback for running post-processing on tile content (Mesh or Points) - Default: `undefined` */
+  contentPostProcess?: (content: Mesh | Points) => void;
   /** When viewing b3dm (mesh) tiles, show meshes as wireframe - Default: `false`. */
   wireframe?: boolean;
-  /** When viewing b3dm (mesh) tiles, compute the vertex normals - Default: `false`. */
-  computeNormals?: boolean;
   /** When viewing Point Cloud tiles, how should the points be colored ({@link PointCloudColoring}) - Default: `PointCloudColoring.White` */
   pointCloudColoring?: PointCloudColoring;
   /** Point size for Point Cloud tiles -  Default: `1.0` */
   pointSize?: number;
   /** Debug mode: Show tile bounding boxes. Make sure to add the boxes to the scene from {@link Runtime.getTileBoxes} - Default: `false` */
   debug?: boolean;
-  /** A path to that contains the basis universal library. e.g: `https://unpkg.com/three@0.129.0/examples/js/libs/basis` - Default: `undefined` */
+  /** Provide an existing three js GLTFLoader so that KTX2 and DRACO workers are reused across the application*/
+  gltfLoader?: GLTFLoader;
+  /** A path to that contains the basis universal library. e.g: `https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/basis` - Default: `undefined` */
   basisTranscoderPath?: string;
-  /** A path to that contains the draco library. e.g: `https://unpkg.com/three@0.129.0/examples/js/libs/draco` - Default: `undefined` */
+  /** A path to that contains the draco library. e.g: `https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco` - Default: `undefined` */
   dracoDecoderPath?: string;
-  /** How to handle geo transformations: Reset any geo location and place the model at (0,0,0), Apply Mercator projection (for use with ccommon 2D mapping applications, or convert WGS84 long/lat to 3D cartesian coordinates)- Default: `Reset` */
-  geoTransform?: GeoTransform;
   /** When using a three.js loading manager, do not call `onLoad` until this number of tiles were loaded - Default: `undefined` */
   preloadTilesCount?: number;
 }
 
 /** Container object for interfacing with lat/long/height coordinates */
 interface GeoCoord {
+  /** Longitude */
   long: number;
+  /** Latitude */
   lat: number;
+  /** Height */
   height: number;
+}
+
+interface FeatureToColor {
+  /** Name of the property in the GeoJSON feature data */
+  feature: string;
+  /** A function mapping a value of the property to a vertex color*/
+  colorMap: (value: number) => Color;
+}
+
+interface GeoJSONLoaderProps {
+  /** The URL of the GeoJSON file. */
+  url: string;
+  /** cartographic A height in which to place the GeoJSON */ 
+  height: number;
+  /** A mapping function between data features and vertex colors */
+  featureToColor?: FeatureToColor;
 }
 
 /** Runtime methods that can be used once a tileset is loaded */
@@ -119,6 +156,8 @@ interface Runtime {
   * @returns {@link https://github.com/uber-web/probe.gl/blob/master/docs/api-reference/stats/stats.md | Stats}
   */
   getStats(): Stats;
+  /** Get the tileset's attribution text. */
+  getDataAttributions(): string;
   /** Get the tile bounding boxes group when `debug: true` is set. */
   getTileBoxes(): Object3D;
   /** Show or hide the tile bounding boxes. */
@@ -131,6 +170,8 @@ interface Runtime {
   setShading(Shading): void;
   /** Set the current view distance scale. See {@link LoaderOptions} */
   setViewDistanceScale(number): void;
+  /** Set the current maximum screen space error. See {@link LoaderOptions} */
+  setMaximumScreenSpaceError(number): void;
   /** In point clouds wher the points are classified as `Ground`, hide the ground level points - Default: `false`.*/
   setHideGround(boolean): void;
   /** In point clouds set the type of coloring used. See {@link PointCloudColoring} */
@@ -147,12 +188,32 @@ interface Runtime {
   getLatLongHeightFromPosition(Vector3): GeoCoord;
   /** When viewing a Geo-located tileset, world-space `Vector3` from a {@link GeoCoord}. */
   getPositionFromLatLongHeight(GeoCoord): Vector3;
+  /** Orient a WGS84 globe to lat/long*/
+  orientToGeocoord(coord: GeoCoord): void;
+  /** Get Web-Mercator coordinates from Lat/long */
+  getWebMercatorCoord(coord: GeoCoord): void;
   /** Get the current camera frustum as mesh planes (for debugging purposes). */
-  getCameraFrustum(Camera): Object3D;
+  getCameraFrustum(camera: Camera): Object3D;
+  /** Overlay a GeoJSON polygon on top of geo-located 3d tiles. Implements a _Draping_ algorithm from https://ieeexplore.ieee.org/abstract/document/8811991 */
+  overlayGeoJSON(geoJSONMesh: Mesh, shaderOptions?:DrapingShaderOptions): void;  
+  /** Set the viewport properties */
+  setViewport(viewport: Viewport): void;
+  /** Set the renderer used for shader processsing */
+  setRenderer(renderer: WebGLRenderer): void;
   /** Update the tileset for rendering. */
-  update(number, WebGLRenderer, Camera): void;
+  update(dt:Number, camera:Camera): void;
   /** Dispose of all of the tileset's assets in memory. */
   dispose(): void;
 }
 
-export { LoaderProps, LoaderOptions, PointCloudColoring, Runtime, GeoCoord, Shading, GeoTransform };
+export type { 
+  LoaderProps, 
+  LoaderOptions, 
+  Runtime, 
+  GeoCoord, 
+  GeoJSONLoaderProps, 
+  FeatureToColor, 
+  DrapingShaderOptions,
+  Viewport
+};
+export { PointCloudColoring, Shading }

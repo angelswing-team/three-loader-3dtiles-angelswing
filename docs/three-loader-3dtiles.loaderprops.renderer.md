@@ -4,9 +4,9 @@
 
 ## LoaderProps.renderer property
 
-Required when using compressed textures (basis universal) for GPU feature detection.
+An existing renderer reference. Required for shader processing.
 
-<b>Signature:</b>
+**Signature:**
 
 ```typescript
 renderer?: WebGLRenderer;

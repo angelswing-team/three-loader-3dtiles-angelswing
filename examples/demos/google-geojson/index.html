@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Tiles Loader: Google Maps 3D Tiles with GeoJSON overlay</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #canvas-parent {
+      width: 100vw;
+      height: 100vh;
+      touch-action: none;
+    }
+    #guide {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 300px;
+      padding: 1rem 2rem;
+      font-family:'Courier New', Courier, monospace;
+      line-height: 1.2;
+      background-color: white;
+      color: black;
+    }
+
+    #guide p {
+      margin-top: 10px;
+    }
+    #stats-widget  {
+      position: fixed;
+      top: 70px;
+      padding: 10px;
+    }
+    #stats-widget div {
+      width: 300px;
+      word-break: break-all;
+    }
+    #button {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      padding: 12px;
+      border-radius: 50%;
+      margin-bottom: 0px;
+      background-color: #FFF;
+      opacity: .9;
+      z-index: 999;
+      box-shadow: 0 0 4px rgb(0 0 0 / 15%);
+    }
+    @media (max-width:480px) {
+      #guide, #stats-widget { display: none; }
+    }
+
+    #data-attribution {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      padding: 10px;
+      font-size: 14px;
+      background-color: rgba(255, 255, 255, 0.8);
+      color: black;
+      line-height: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-parent"></div>
+  <div id="stats-widget"></div>
+  <div id="data-attribution">
+    <p>Example ported from <a href="https://deck.gl/examples/google-3d-tiles" target="_blank">Deck.gl.</a></p>
+    <p>Draping algorithm by <a href="https://ieeexplore.ieee.org/abstract/document/8811991" target="_blank">Trapp and Döllner.</a></p>
+    <p>Data attribution: <span id="copyright"></span></div></p>
+  </div>
+
+
+  <script type='module'>
+    import { 
+      Vector3,
+      Scene, 
+      PerspectiveCamera, 
+      OrthographicCamera,
+      WebGLRenderer, 
+      GridHelper, 
+      Clock,
+      Matrix4,
+      Euler,
+      Vector2,
+      Color,
+      Mesh,
+      SphereGeometry,
+      MeshBasicMaterial,
+      SRGBColorSpace,
+      ColorManagement,
+      AdditiveBlending,
+      SubtractiveBlending,
+      MultiplyBlending,
+      NormalBlending
+    } from 'three';
+
+    import { MapControls } from 'three/examples/jsm/controls/MapControls';
+    import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
+
+    import { Loader3DTiles, PointCloudColoring  } from '../../../src/index';
+    import { MapView, OpenStreetMapsProvider } from 'geo-three'
+    import { TweenMax } from 'gsap'
+
+    import Stats from 'three/examples/jsm/libs/stats.module.js';
+    import StatsWidget from '@probe.gl/stats-widget';
+
+    const canvasParent = document.querySelector('#canvas-parent');
+    const statsParent = document.querySelector('#stats-widget')
+
+    const scene = new Scene();
+
+    const camera = new PerspectiveCamera(
+      45,
+      1,
+      10,
+      100000,
+    );
+
+    const renderer = new WebGLRenderer();
+
+    const clock = new Clock()
+    const controls = new MapControls( camera, canvasParent);
+    controls.listenToKeyEvents( window );
+
+    canvasParent.appendChild(renderer.domElement);
+
+    const threeJsStats = new Stats();
+    threeJsStats.domElement.style.position = 'absolute';
+    threeJsStats.domElement.style.top = '10px';
+    threeJsStats.domElement.style.left = '10px';
+
+    canvasParent.appendChild( threeJsStats.domElement );
+
+    const queryParams = new URLSearchParams(document.location.search);
+
+    const copyrightElement = document.getElementById('copyright');
+
+    loadTileset();
+
+    const demoLat = queryParams.get('lat') ?? 50.089;
+    const demoLong = queryParams.get('long') ?? 14.42;
+    const demoHeight = queryParams.get('height') ?? 0;
+    
+    const guiParams = {
+      'lat': demoLat,
+      'long': demoLong,
+      'height': demoHeight,
+      'googleApiKey': queryParams.get('googleApiKey') ?? '',
+      'reload': () => {setQueryParams(); window.location.reload()},
+      'enableDraping': true,
+      'minHeight': 0.0,
+      'maxHeight': 300.0,
+      'samples': 4,
+      'sampleStep': 4.0,
+      'opacity': 0.7,
+      'blendingType': 'Normal'
+    };
+
+    const BLENDING_TYPES = {
+      'Normal': NormalBlending,
+      'Additive': AdditiveBlending,
+      'Subtractive': SubtractiveBlending,
+      'Multiply': MultiplyBlending
+    };
+    
+    function setQueryParams() {
+      if (window.location.hostname !== 'nytimes.github.io') {
+        queryParams.set('googleApiKey', guiParams.googleApiKey);
+      }
+      queryParams.set('lat', guiParams.lat);
+      queryParams.set('long', guiParams.long);
+      queryParams.set('height', guiParams.height);
+      window.history.replaceState({}, '', '?' + queryParams.toString());
+    }
+
+    let tilesRuntime = undefined;
+    let tilesModel = undefined;
+    let statsRuntime = undefined;
+    
+    let geoJSONMesh = undefined;
+    let drapingMaterial = undefined;
+    let basicMaterial = undefined;
+
+
+    async function loadTileset() {
+      const result = await Loader3DTiles.load(
+        {
+          url:
+            "https://tile.googleapis.com/v1/3dtiles/root.json",
+          renderer,
+          viewport: getViewport(),
+          options: {
+            googleApiKey: 
+              window.location.hostname === 'nytimes.github.io' ?
+              // restricted to only being used for Map Tiles API, and only on the domain nytimes.github.io
+              'AIzaSyD7mJdqBYNwSP6RUQcmstZ6DXfn3rf5wkM' :
+               queryParams.get('googleApiKey') ?? '',
+            dracoDecoderPath: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco',
+            basisTranscoderPath: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/basis',
+            pointCloudColoring: PointCloudColoring.RGB,
+            maximumScreenSpaceError: queryParams.get('sse') ?? 48 
+          }
+        }
+      );
+
+      const {model, runtime} = result;
+      tilesRuntime = runtime;
+      tilesModel = model;
+
+      onWindowResize();
+      scene.add(model);
+
+      statsRuntime = new StatsWidget(runtime.getStats(), {container: statsParent });
+      statsParent.style.visibility = 'visible';
+
+      runtime.orientToGeocoord({
+        lat: Number(demoLat), 
+        long: Number(demoLong), 
+        height: Number(demoHeight)
+      });
+      
+      camera.translateY(1000);
+      controls.update();
+      
+      geoJSONMesh = await Loader3DTiles.loadGeoJSON({
+        url: 'https://raw.githubusercontent.com/visgl/deck.gl-data/1126e3041884597d2d3777446d1c292efc26a671/examples/google-3d-tiles/buildings.geojson',
+        height: 270,
+        featureToColor: { 
+          feature: 'distance_to_nearest_tree',
+          colorMap: (value) => {
+            if (value < 50) return new Color("rgb(254, 235, 226)");
+            if (value < 100) return new Color("rgb(251, 180, 185)"); 
+            if (value < 200) return new Color("rgb(247, 104, 161)");
+            if (value < 300) return new Color("rgb(197, 27, 138)");
+            return new Color("rgb(122, 1, 119)");
+          }
+        }
+      });
+
+      basicMaterial = geoJSONMesh.material;
+      runtime.overlayGeoJSON(geoJSONMesh);
+      drapingMaterial = geoJSONMesh.material;
+      geoJSONMesh.updateMatrixWorld(true);
+      updateShaderParams();
+      scene.add(geoJSONMesh);
+    }
+
+    function render(t) {
+      const dt = clock.getDelta()
+      controls.update();
+      if (tilesRuntime) {
+        tilesRuntime.update(dt, camera);
+      }
+      if (statsRuntime) {
+        statsRuntime.update();
+      }
+      renderer.render(scene, camera);
+      threeJsStats.update();
+      copyrightElement.innerHTML = tilesRuntime?.getDataAttributions() ?? '';
+      window.requestAnimationFrame(render);
+    }
+
+    onWindowResize();
+
+    function onWindowResize() {
+      renderer.setSize(canvasParent.clientWidth, canvasParent.clientHeight);
+      tilesRuntime?.setViewport(getViewport());
+      camera.aspect = canvasParent.clientWidth / canvasParent.clientHeight;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', onWindowResize)
+
+    function getViewport() {
+      return {
+        width: canvasParent.clientWidth,
+        height: canvasParent.clientHeight,
+        devicePixelRatio: window.devicePixelRatio
+      }
+    }
+
+    function updateShaderParams() {
+      if (geoJSONMesh) {
+        geoJSONMesh.material = guiParams.enableDraping ? drapingMaterial : basicMaterial;
+        if (guiParams.enableDraping) {
+          geoJSONMesh.material.uniforms.minHeight.value = guiParams.minHeight;
+          geoJSONMesh.material.uniforms.maxHeight.value = guiParams.maxHeight;
+          geoJSONMesh.material.uniforms.samples.value = guiParams.samples;
+          geoJSONMesh.material.uniforms.sampleStep.value = guiParams.sampleStep;
+          geoJSONMesh.material.uniforms.opacity.value = guiParams.opacity;
+          geoJSONMesh.material.blending = BLENDING_TYPES[guiParams.blendingType];
+        }
+      }
+    }
+
+    // GUI
+    const gui = new GUI()
+    .title("Params");
+    gui.width = 300;
+    gui.add( guiParams, 'lat' )
+    gui.add( guiParams, 'long')
+    gui.add( guiParams, 'height')
+    if (window.location.hostname !== 'nytimes.github.io') {
+      gui.add( guiParams, 'googleApiKey' )
+    }
+    gui.add( guiParams, 'enableDraping' )
+    gui.add( guiParams, 'minHeight', 0.0, 1000.0 )
+    gui.add( guiParams, 'maxHeight', 0.0, 1000.0 )
+    gui.add( guiParams, 'samples', 1, 10 )
+    gui.add( guiParams, 'sampleStep', 0.1, 10.0 )
+    gui.add( guiParams, 'opacity', 0, 1.0)
+    gui.add( guiParams, 'blendingType', Object.keys(BLENDING_TYPES))
+    gui.add( guiParams, 'reload' );
+    gui.onChange(updateShaderParams)
+    gui.open();
+
+    render();
+  </script>
+  <a id="button" target="_blank" href="https://github.com/nytimes/three-loader-3dtiles/blob/main/examples/demos/google-geojson/index.html" title="View source code for demo"><img src="../ic_code_black_24dp.svg"></a>
+</body>
+</html>

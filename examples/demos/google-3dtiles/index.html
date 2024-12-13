@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Tiles Loader: Google Maps 3D Tiles</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #canvas-parent {
+      width: 100vw;
+      height: 100vh;
+      touch-action: none;
+    }
+    #guide {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 300px;
+      padding: 1rem 2rem;
+      font-family:'Courier New', Courier, monospace;
+      line-height: 1.2;
+      background-color: white;
+      color: black;
+    }
+
+    #guide p {
+      margin-top: 10px;
+    }
+    #stats-widget  {
+      position: fixed;
+      top: 70px;
+      padding: 10px;
+    }
+    #stats-widget div {
+      width: 300px;
+      word-break: break-all;
+    }
+    #button {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      padding: 12px;
+      border-radius: 50%;
+      margin-bottom: 0px;
+      background-color: #FFF;
+      opacity: .9;
+      z-index: 999;
+      box-shadow: 0 0 4px rgb(0 0 0 / 15%);
+    }
+    @media (max-width:480px) {
+      #guide, #stats-widget { display: none; }
+    }
+
+    #data-attribution {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      padding: 10px;
+      font-size: 14px;
+      background-color: rgba(0, 0, 0, 0.8);
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-parent"></div>
+  <div id="stats-widget"></div>
+  <div id="data-attribution">Data attribution: <span id="copyright"></span></div>
+
+
+  <script type='module'>
+    import { 
+      Vector3,
+      Scene, 
+      PerspectiveCamera, 
+      WebGLRenderer, 
+      GridHelper, 
+      Clock,
+      Matrix4,
+      Euler,
+      Vector2
+    } from 'three';
+
+    import { MapControls } from 'three/examples/jsm/controls/MapControls';
+    import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
+
+    import { Loader3DTiles, PointCloudColoring  } from '../../../src/index';
+    import { MapView, OpenStreetMapsProvider } from 'geo-three'
+    import { TweenMax } from 'gsap'
+
+    import Stats from 'three/examples/jsm/libs/stats.module.js';
+    import StatsWidget from '@probe.gl/stats-widget';
+
+    const canvasParent = document.querySelector('#canvas-parent');
+    const statsParent = document.querySelector('#stats-widget')
+
+    const scene = new Scene();
+    const camera = new PerspectiveCamera(
+      45,
+      1,
+      10,
+      100000,
+    );
+
+    const renderer = new WebGLRenderer();
+    renderer.preserveDrawingBuffer  = true;
+
+    const clock = new Clock()
+    const controls = new MapControls( camera, canvasParent);
+    controls.listenToKeyEvents( window );
+
+    canvasParent.appendChild(renderer.domElement);
+
+    const threeJsStats = new Stats();
+    threeJsStats.domElement.style.position = 'absolute';
+    threeJsStats.domElement.style.top = '10px';
+    threeJsStats.domElement.style.left = '10px';
+
+    canvasParent.appendChild( threeJsStats.domElement );
+
+    const queryParams = new URLSearchParams(document.location.search);
+
+    const copyrightElement = document.getElementById('copyright');
+
+    loadTileset();
+
+    // Default is Tokyo Tower
+    const demoLat = queryParams.get('lat') ?? 35.6586;
+    const demoLong = queryParams.get('long') ?? 139.7454;
+    const demoHeight = queryParams.get('height') ?? 100;
+    
+    const guiParams = {
+      'lat': demoLat,
+      'long': demoLong,
+      'height': demoHeight,
+      'googleApiKey': queryParams.get('googleApiKey') ?? '',
+      'reload': setQueryParams,
+    };
+    
+    function setQueryParams() {
+      if (window.location.hostname !== 'nytimes.github.io') {
+        queryParams.set('googleApiKey', guiParams.googleApiKey);
+      }
+      queryParams.set('lat', guiParams.lat);
+      queryParams.set('long', guiParams.long);
+      queryParams.set('height', guiParams.height);
+      window.history.replaceState({}, '', '?' + queryParams.toString());
+      window.location.reload();
+    }
+
+    let tilesRuntime = undefined;
+    let tilesModel = undefined;
+    let statsRuntime = undefined;
+    
+    async function loadTileset() {
+      const result = await Loader3DTiles.load(
+        {
+          url:
+            "https://tile.googleapis.com/v1/3dtiles/root.json",
+          viewport: getViewport(),
+          options: {
+            googleApiKey: 
+              window.location.hostname === 'nytimes.github.io' ?
+              // restricted to only being used for Map Tiles API, and only on the domain nytimes.github.io
+              'AIzaSyD7mJdqBYNwSP6RUQcmstZ6DXfn3rf5wkM' :
+               queryParams.get('googleApiKey') ?? '',
+            dracoDecoderPath: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco',
+            basisTranscoderPath: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/basis',
+            pointCloudColoring: PointCloudColoring.RGB,
+            maximumScreenSpaceError: queryParams.get('sse') ?? 48
+          }
+        }
+      );
+
+      const {model, runtime} = result;
+
+      tilesRuntime = runtime;
+      tilesModel = model;
+
+      onWindowResize();
+
+      scene.add(model);
+      scene.add(runtime.getTileBoxes());
+
+      statsRuntime = new StatsWidget(runtime.getStats(), {container: statsParent });
+      statsParent.style.visibility = 'visible';
+
+      // Tokyo tower
+      runtime.orientToGeocoord({
+        lat: Number(demoLat), 
+        long: Number(demoLong), 
+        height: Number(demoHeight)
+      });
+      
+      camera.translateY(1000);
+      controls.update();
+    }
+
+    function render(t) {
+      const dt = clock.getDelta()
+      controls.update();
+      if (tilesRuntime) {
+        tilesRuntime.update(dt, camera);
+      }
+      if (statsRuntime) {
+        statsRuntime.update();
+      }
+      renderer.render(scene, camera);
+      threeJsStats.update();
+      copyrightElement.innerHTML = tilesRuntime?.getDataAttributions() ?? '';
+      window.requestAnimationFrame(render);
+
+    }
+
+    onWindowResize();
+
+    function onWindowResize() {
+      renderer.setSize(canvasParent.clientWidth, canvasParent.clientHeight);
+      tilesRuntime?.setViewport(getViewport());
+      camera.aspect = canvasParent.clientWidth / canvasParent.clientHeight;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', onWindowResize)
+
+    function getViewport() {
+      return {
+        width: canvasParent.clientWidth,
+        height: canvasParent.clientHeight,
+        devicePixelRatio: window.devicePixelRatio
+      }
+    }
+
+    // GUI
+    const gui = new GUI()
+    .title("Query params");
+    gui.width = 300;
+    gui.add( guiParams, 'lat' )
+    gui.add( guiParams, 'long')
+    gui.add( guiParams, 'height')
+    if (window.location.hostname !== 'nytimes.github.io') {
+      gui.add( guiParams, 'googleApiKey' )
+    }
+    gui.add( guiParams, 'reload' );
+    gui.open();
+
+    render();
+  </script>
+  <a id="button" target="_blank" href="https://github.com/nytimes/three-loader-3dtiles/blob/main/examples/demos/google-3dtiles/index.html" title="View source code for demo"><img src="../ic_code_black_24dp.svg"></a>
+</body>
+</html>

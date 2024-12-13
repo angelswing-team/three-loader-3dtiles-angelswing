@@ -4,33 +4,48 @@
 
 ```ts
 
+import { Blending } from 'three';
+import { Camera } from 'three';
+import { Color } from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { LoadingManager } from 'three';
 import { Material } from 'three';
+import { Mesh } from 'three';
 import { Object3D } from 'three';
-import { Shader } from 'three';
-import { Stats } from '@probe.gl/stats';
+import { Points } from 'three';
+import { Stats as Stats_2 } from '@probe.gl/stats';
 import { Tileset3D } from '@loaders.gl/tiles';
 import { Vector3 } from 'three';
 import { WebGLRenderer } from 'three';
 
+// @public (undocumented)
+export interface DrapingShaderOptions {
+    blendingType: Blending;
+    maxHeight: number;
+    minHeight: number;
+    opacity: number;
+    samples: number;
+    sampleStep: number;
+}
+
+// @public (undocumented)
+export interface FeatureToColor {
+    colorMap: (value: number) => Color;
+    feature: string;
+}
+
 // @public
 export interface GeoCoord {
-    // (undocumented)
     height: number;
-    // (undocumented)
     lat: number;
-    // (undocumented)
     long: number;
 }
 
 // @public (undocumented)
-export enum GeoTransform {
-    // (undocumented)
-    Mercator = 2,
-    // (undocumented)
-    Reset = 1,
-    // (undocumented)
-    WGS84Cartesian = 3
+export interface GeoJSONLoaderProps {
+    featureToColor?: FeatureToColor;
+    height: number;
+    url: string;
 }
 
 // @public
@@ -39,25 +54,30 @@ export class Loader3DTiles {
         model: Object3D;
         runtime: Runtime;
     }>;
+    static loadGeoJSON(props: GeoJSONLoaderProps): Promise<Object3D>;
 }
 
 // @public
 export interface LoaderOptions {
     basisTranscoderPath?: string;
     cesiumIONToken?: string;
-    computeNormals?: boolean;
+    collectAttributions?: boolean;
+    contentPostProcess?: (content: Mesh | Points) => void;
     debug?: boolean;
     dracoDecoderPath?: string;
-    geoTransform?: GeoTransform;
+    gltfLoader?: GLTFLoader;
+    googleApiKey?: string;
     material?: Material;
     maxConcurrency?: number;
     maximumMemoryUsage?: number;
     maximumScreenSpaceError?: number;
     maxRequests?: number;
+    memoryAdjustedScreenSpaceError?: boolean;
+    memoryCacheOverflow?: number;
     pointCloudColoring?: PointCloudColoring;
     pointSize?: number;
     preloadTilesCount?: number;
-    shaderCallback?: (shader: Shader, renderer: WebGLRenderer) => void;
+    resetTransform?: boolean;
     shading?: Shading;
     skipLevelOfDetail?: boolean;
     throttleRequests?: boolean;
@@ -76,6 +96,8 @@ export interface LoaderProps {
     options?: LoaderOptions;
     renderer?: WebGLRenderer;
     url: string;
+    // Warning: (ae-forgotten-export) The symbol "Viewport" needs to be exported by the entry point index.d.ts
+    viewport: Viewport;
 }
 
 // @public
@@ -95,24 +117,31 @@ export enum PointCloudColoring {
 // @public
 export interface Runtime {
     dispose(): void;
-    getCameraFrustum(Camera: any): Object3D;
+    getCameraFrustum(camera: Camera): Object3D;
+    getDataAttributions(): string;
     getLatLongHeightFromPosition(Vector3: any): GeoCoord;
     getPositionFromLatLongHeight(GeoCoord: any): Vector3;
-    getStats(): Stats;
+    getStats(): Stats_2;
     getTileBoxes(): Object3D;
     getTileset(): Tileset3D;
+    getWebMercatorCoord(coord: GeoCoord): void;
+    orientToGeocoord(coord: GeoCoord): void;
+    overlayGeoJSON(geoJSONMesh: Mesh, shaderOptions?: DrapingShaderOptions): void;
     setDebug(boolean: any): void;
     setElevationRange(range: ReadonlyArray<number>): void;
     setHideGround(boolean: any): void;
     setIntensityContrast(number: any): void;
+    setMaximumScreenSpaceError(number: any): void;
     setMaxIntensity(number: any): void;
     setPointAlpha(number: any): void;
     setPointCloudColoring(PointCloudColoring: any): void;
+    setRenderer(renderer: WebGLRenderer): void;
     setShading(Shading: any): void;
     setViewDistanceScale(number: any): void;
+    setViewport(viewport: Viewport): void;
     setWireframe(boolean: any): void;
     showTiles(boolean: any): void;
-    update(number: any, WebGLRenderer: any, Camera: any): void;
+    update(dt: Number, camera: Camera): void;
 }
 
 // @public
@@ -124,7 +153,6 @@ export enum Shading {
     // (undocumented)
     ShadedTexture = 2
 }
-
 
 // (No @packageDocumentation comment for this package)
 

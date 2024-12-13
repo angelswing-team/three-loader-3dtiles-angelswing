@@ -1,6 +1,6 @@
 # three-loader-3dtiles  
 ![license](https://img.shields.io/badge/License-Apache%202.0-yellow.svg) [![npm version](https://badge.fury.io/js/three-loader-3dtiles.svg)](https://badge.fury.io/js/three-loader-3dtiles)
-[![Build Status](https://cloud.drone.io/api/badges/nytimes/three-loader-3dtiles/status.svg)](https://cloud.drone.io/nytimes/three-loader-3dtiles)
+[![Build Status](https://drone.dv.nyt.net/api/badges/nytimes/three-loader-3dtiles/status.svg)](https://drone.dv.nyt.net/nytimes/three-loader-3dtiles)
 
 [Demos](#demos) &mdash;
 [Usage](#basic-usage) &mdash;
@@ -21,9 +21,11 @@ Development of this library started at The New York Times R&D as an effort to cr
 ---
 
 ## Demos
-* [Photogrammetry exported to 3D Tiles in RealityCapture](https://nytimes.github.io/three-loader-3dtiles/examples/demos/realitycapture)
-* [LiDAR Point Cloud hosted as 3D Tiles in Cesium ION](https://nytimes.github.io/three-loader-3dtiles/examples/demos/cesium)
-* [Map overlay with OpenStreetMap](https://nytimes.github.io/three-loader-3dtiles/examples/demos/map-overlay)
+* [Photogrammetry exported to 3D Tiles in RealityCapture](https://nytimes.github.io/three-loader-3dtiles/dist/web/examples/demos/realitycapture)
+* [LiDAR Point Cloud hosted as 3D Tiles in Cesium ION](https://nytimes.github.io/three-loader-3dtiles/dist/web/examples/demos/cesium)
+* [Map overlay with OpenStreetMap](https://nytimes.github.io/three-loader-3dtiles/dist/web/examples/demos/map-overlay)
+* [Google Maps Photorealistic 3D Tiles](https://nytimes.github.io/three-loader-3dtiles/dist/web/examples/demos/google-3dtiles)
+* [Google 3D Tiles with GeoJSON Draping (experimental)](https://nytimes.github.io/three-loader-3dtiles/dist/web/examples/demos/google-geojson)
 
 ---
 
@@ -52,10 +54,14 @@ let tilesRuntime = null;
 async function loadTileset() {
   const result = await Loader3DTiles.load(
       url: 'https://<TILESET URL>/tileset.json',
-      renderer: renderer,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio
+      }
       options: {
-        dracoDecoderPath: 'https://cdn.jsdelivr.net/npm/three@0.137.0/examples/js/libs/draco',
-        basisTranscoderPath: 'https://cdn.jsdelivr.net/npm/three@0.137.0/examples/js/libs/basis',
+        dracoDecoderPath: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco',
+        basisTranscoderPath: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/basis',
       }
   )
   const {model, runtime} = result
@@ -66,7 +72,7 @@ async function loadTileset() {
 function render() {
   const dt = clock.getDelta()
   if (tilesRuntime) {
-    tilesRuntime.update(dt, renderer, camera)
+    tilesRuntime.update(dt, window.innerHeight, camera)
   }
   renderer.render(scene, camera)
   window.requestAnimationFrame(render)
@@ -80,23 +86,20 @@ render()
 
 ## Installation
 
-The library supports [three.js](https://threejs.org/) r137 and uses its GLTF, Draco, and KTX2/Basis loaders.
+The library supports [three.js](https://threejs.org/) r160 and uses its GLTF, Draco, and KTX2/Basis loaders.
 Refer to the `browserslist` field in [package.json](./package.json) for target browsers.
 
 ### 1. ES Module
-Download [dist/three-loader-3dtiles.esm.min.js](dist/three-loader-3dtiles.esm.min.js) and use an `importmap` to import the dependencies. See [here](examples/installation/es-module) for a full example. The [demos](examples/demos) also use this method of installation:
+Use an `importmap` to import the dependencies from the npm. See [here](examples/installation/es-module) for a full example. 
 
 #### **`index.html`**
   ```html
-  <script async src="https://ga.jspm.io/npm:es-module-shims@1.4.4/dist/es-module-shims.js"></script>
   <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.skypack.dev/three@0.137.0",
-        "three/examples/jsm/loaders/GLTFLoader.js": "https://cdn.skypack.dev/three@v0.137.0/examples/jsm/loaders/GLTFLoader",
-        "three/examples/jsm/loaders/DRACOLoader.js": "https://cdn.skypack.dev/three@v0.137.0/examples/jsm/loaders/DRACOLoader",
-        "three/examples/jsm/loaders/KTX2Loader.js": "https://cdn.skypack.dev/three@v0.137.0/examples/jsm/loaders/KTX2Loader",
-        "three-loader-3dtiles" : "./three-loader-3dtiles.esm.min.js"
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/examples/jsm/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+        "three-loader-3dtiles" : "https://unpkg.com/three-loader-3dtiles/dist/lib/three-loader-3dtiles.js"
       }
     }
   </script>
@@ -110,7 +113,7 @@ Download [dist/three-loader-3dtiles.esm.min.js](dist/three-loader-3dtiles.esm.mi
   ```
 
 ### 3. NPM
-If you use a build system such as Webpack / Parcel / Rollup etc, you should also install the library along with three.js from npm:
+If you use a build system such as Webpack / Vite / Rollup etc, you should also install the library along with three.js from npm:
 ```
 npm install -s three three-loader-3dtiles
 ```
@@ -172,7 +175,7 @@ npm run test
 
 ## Docs
 * API documentation is available [here](docs/three-loader-3dtiles.md). 
-* Code for the demos is in [`examples/demos`](examples/demos).
+* Code for the demos is in [examples/demos](https://github.com/nytimes/three-loader-3dtiles/tree/main/examples/demos).
 
 ## Alternatives
 To our knowledge, this is the only [loaders.gl](https://github.com/visgl/loaders.gl)-based Three.js library, but there are several implementations of 3D Tiles for Three.js. Notable examples:

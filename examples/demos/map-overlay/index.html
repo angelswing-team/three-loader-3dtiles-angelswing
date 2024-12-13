@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -82,25 +83,6 @@
     </p>
   </div>
 
-  <script async src="https://ga.jspm.io/npm:es-module-shims@1.4.4/dist/es-module-shims.js"></script>
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.skypack.dev/three@0.137.0",
-        "three/examples/jsm/loaders/GLTFLoader.js": "https://cdn.skypack.dev/three@v0.137.0/examples/jsm/loaders/GLTFLoader",
-        "three/examples/jsm/loaders/DRACOLoader.js": "https://cdn.skypack.dev/three@v0.137.0/examples/jsm/loaders/DRACOLoader",
-        "three/examples/jsm/loaders/KTX2Loader.js": "https://cdn.skypack.dev/three@v0.137.0/examples/jsm/loaders/KTX2Loader",
-        "three/examples/jsm/controls/OrbitControls": "https://cdn.skypack.dev/three@v0.137.0/examples/jsm/controls/OrbitControls",
-        "three/examples/jsm/libs/stats.module.js": "https://cdn.skypack.dev/three@v0.137.0/examples/jsm/libs/stats.module",
-        "@probe.gl/stats" : "https://cdn.skypack.dev/@probe.gl/stats@3.3.1",
-        "@probe.gl/stats-widget" : "https://cdn.skypack.dev/@probe.gl/stats-widget@3.5.0",
-        "three-loader-3dtiles" : "../../../dist/three-loader-3dtiles.esm.js",
-        "geo-three": "https://cdn.skypack.dev/geo-three@0.0.18",
-        "gsap": "https://cdn.skypack.dev/gsap@3.10.4"
-        
-    }
-  }
-  </script>
   <script type='module'>
     import { 
       Scene, 
@@ -109,20 +91,21 @@
       GridHelper, 
       Clock,
       Matrix4,
+      Vector2,
       Euler,
-      sRGBEncoding
+      SRGBColorSpace
     } from 'three';
 
     import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
-    import { Loader3DTiles, PointCloudColoring, GeoTransform } from 'three-loader-3dtiles';
+    import { Loader3DTiles, PointCloudColoring } from '../../../src/index.ts';
     import { MapView, OpenStreetMapsProvider } from 'geo-three'
     import { TweenMax } from 'gsap'
 
     import Stats from 'three/examples/jsm/libs/stats.module.js';
     import StatsWidget from '@probe.gl/stats-widget';
 
-    const ION_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWMxMzcyYy0zZjJkLTQwODctODNlNi01MDRkZmMzMjIxOWIiLCJpZCI6OTYyMCwic2NvcGVzIjpbImFzbCIsImFzciIsImdjIl0sImlhdCI6MTU2Mjg2NjI3M30.1FNiClUyk00YH_nWfSGpiQAjR5V2OvREDq1PJ5QMjWQ';
+    const ION_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3NjEwMjA4Ni00YmVkLTQyMjgtYjRmZS1lY2M3ZWFiMmFmNTYiLCJpZCI6MjYxMzMsImlhdCI6MTY3NTM2ODY4NX0.chGkGL6DkDNv5wYJQDMzWIvi9iDoVa27dgng_5ARDmo';
 
     const canvasParent = document.querySelector('#canvas-parent');
     const statsParent = document.querySelector('#stats-widget')
@@ -153,7 +136,7 @@
 
     const queryParams = new URLSearchParams(document.location.search);
     if (queryParams.get('tilesetUrl')) {
-      renderer.outputEncoding = sRGBEncoding;
+      renderer.outputColorSpace = SRGBColorSpace;
     }
 
     loadTileset();
@@ -172,38 +155,48 @@
         {
           url:
             queryParams.get('tilesetUrl') ??
-            "https://assets.cesium.com/43978/tileset.json",
-          renderer: renderer,
+            "https://assets.ion.cesium.com/43978/tileset.json",
+          viewport: getViewport(),
           options: {
             cesiumIONToken: queryParams.get('tilesetUrl') ? null : ION_TOKEN, 
-            dracoDecoderPath: 'https://cdn.jsdelivr.net/npm/three@0.137.0/examples/js/libs/draco',
-            basisTranscoderPath: 'https://cdn.jsdelivr.net/npm/three@0.137.0/examples/js/libs/basis',
+            dracoDecoderPath: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco',
+            basisTranscoderPath: 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/basis',
             pointCloudColoring: PointCloudColoring.RGB,
             maximumScreenSpaceError: queryParams.get('sse') ?? 6,
-            geoTransform: GeoTransform.Mercator
+            memoryAdjustedScreenSpaceError: false
           }
         }
       );
 
       const {model, runtime} = result;
 
+      onWindowResize();
+
       tilesRuntime = runtime;
       tilesModel = model;
+      model.rotation.set(-Math.PI / 2, 0, 0);
       scene.add(model);
 
       statsRuntime = new StatsWidget(runtime.getStats(), {container: statsParent });
       statsParent.style.visibility = 'visible';
 
-      if (!queryParams.get('tilesetUrl')) {
-        // Scaling the scan to align with Maps, and bringing it up above the map
-        model.scale.set(1.27, 1.27, 1.27);
-        model.translateZ(230);
-      }
-      camera.position.copy(model.position);
-      camera.translateY(80000);
+      camera.translateY(10000);
 
-      controls.target.copy(model.position);
-      controls.update();
+      runtime.orientToGeocoord({
+        long: runtime.getTileset().cartographicCenter[0],
+        lat: runtime.getTileset().cartographicCenter[1],
+        height: runtime.getTileset().cartographicCenter[2]
+      })
+
+      const coords = runtime.getWebMercatorCoord({
+        long: runtime.getTileset().cartographicCenter[0],
+        lat: runtime.getTileset().cartographicCenter[1],
+        height: 0
+      })
+
+      // Set the inverse of the coordinate to bring the map to origin and below the tiles.
+      // TODO: It is not accurately aligned with the tiles (problem with geo-three?).
+      map.position.set(-coords.x, -200, coords.y);
 
       zoomIn();
     }
@@ -229,7 +222,7 @@
       const dt = clock.getDelta()
       controls.update();
       if (tilesRuntime) {
-        tilesRuntime.update(dt, renderer, camera);
+        tilesRuntime.update(dt, camera);
       }
       if (statsRuntime) {
         statsRuntime.update();
@@ -244,10 +237,19 @@
 
     function onWindowResize() {
       renderer.setSize(canvasParent.clientWidth, canvasParent.clientHeight);
+      tilesRuntime?.setViewport(getViewport());
       camera.aspect = canvasParent.clientWidth / canvasParent.clientHeight;
       camera.updateProjectionMatrix();
     }
     window.addEventListener('resize', onWindowResize)
+
+    function getViewport() {
+      return {
+        width: canvasParent.clientWidth,
+        height: canvasParent.clientHeight,
+        devicePixelRatio: window.devicePixelRatio
+      }
+    }
 
     render();
   </script>
